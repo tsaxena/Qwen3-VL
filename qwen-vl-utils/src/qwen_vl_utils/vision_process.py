@@ -492,6 +492,7 @@ def extract_vision_info(conversations: Union[List[Dict[str, Any]], List[List[Dic
                         "image" in ele
                         or "image_url" in ele
                         or "video" in ele
+                        or "audio" in ele
                         or ele.get("type", "text") in ("image", "image_url", "video")
                     ):
                         vision_infos.append(ele)
@@ -509,6 +510,7 @@ def process_vision_info(
     ## Read images or videos
     image_inputs = []
     video_inputs = []
+    audio_inputs = []
     video_sample_fps_list = []
     for vision_info in vision_infos:
         if "image" in vision_info or "image_url" in vision_info:
@@ -518,6 +520,10 @@ def process_vision_info(
                         image_patch_size=image_patch_size, return_video_metadata=return_video_metadata)
             video_sample_fps_list.append(video_sample_fps)
             video_inputs.append(video_input)
+        elif "audio" in vision_info:
+            #print(vision_info)
+            audio_input = fetch_audio(vision_info['audio'])
+            audio_inputs.append(audio_input)
         else:
             raise ValueError("image, image_url or video should in content.")
     if len(image_inputs) == 0:
@@ -531,4 +537,44 @@ def process_vision_info(
 
     if return_video_kwargs:
         return image_inputs, video_inputs, video_kwargs
-    return image_inputs, video_inputs
+    return image_inputs, video_inputs, audio_inputs
+
+# ============================================================================
+# Audio processing addition - added by patch
+# ============================================================================
+
+import soundfile as sf  # Import at module level for fetch_audio
+import numpy as np
+def fetch_audio(audio_bytes: Dict[str, Union[str, bytes]], target_sr: int = 16000)-> np.ndarray:
+    """
+    Decode an audio clip from a byte object into a mono float32 waveform.
+
+    Parameters
+    ----------
+    audio_bytes : bytes
+        Raw binary contents of an audio file.
+    target_sr : int, default 16_000
+        Desired sampling rate. If the original differs, the signal is
+        resampled with high‑quality soxr_hq.
+
+    Returns
+    -------
+    np.ndarray, shape (n_samples,), dtype float32
+        Normalised waveform in range [-1.0, 1.0].
+    """
+    import librosa
+    import io
+
+    # 1. decode compressed audio directly from memory
+    signal, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32")  # shape (n, ch)
+
+    # 2. convert possible stereo → mono
+    if signal.ndim == 2:
+        signal = signal.mean(axis=1)
+
+    # 3. resample if needed
+    if sr != target_sr:
+        signal = librosa.resample(signal, orig_sr=sr, target_sr=target_sr,
+                                  res_type="soxr_hq")
+
+    return signal.astype(np.float32)
